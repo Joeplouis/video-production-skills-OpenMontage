@@ -109,7 +109,7 @@ class JobStatusResponse(BaseModel):
 class EventResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    event_id: str
+    id: str
     job_id: str
     event_type: str
     timestamp: datetime

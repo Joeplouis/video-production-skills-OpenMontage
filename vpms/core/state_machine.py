@@ -48,8 +48,8 @@ class JobState(str, Enum):
 # Valid transitions: from_state -> set of allowed to_states
 TRANSITIONS: dict[JobState, Set[JobState]] = {
     # Normal forward flow
-    JobState.CREATED: {JobState.QUEUED, JobState.CANCELLED},
-    JobState.QUEUED: {JobState.PLANNING, JobState.CANCELLED},
+    JobState.CREATED: {JobState.QUEUED, JobState.CANCELLED, JobState.REJECTED},
+    JobState.QUEUED: {JobState.PLANNING, JobState.CANCELLED, JobState.REJECTED},
     JobState.PLANNING: {JobState.RESEARCHING, JobState.CANCELLED, JobState.BLOCKED},
     JobState.RESEARCHING: {JobState.RESEARCH_READY, JobState.RETRYABLE_FAILURE, JobState.FAILED},
     JobState.RESEARCH_READY: {JobState.SCRIPTING, JobState.CANCELLED},
