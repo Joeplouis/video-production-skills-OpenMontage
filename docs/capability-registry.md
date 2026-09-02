@@ -67,18 +67,57 @@ If any required flag is `False`, `Dispatcher.dispatch()` raises `ValueError` and
 - `vpms/db/repositories/worker_repository.py` — `WorkerRepository`, `CapabilityRepository`
 - `vpms/db/models.py` — `WorkerRegistry`, `WorkerCapability` SQLAlchemy models
 
-## Phase 1 Seeded Workers
+## Phase 2 Registered Workers
 
-Migration `vpms/db/migrations/001_create_vpms_schema.sql` seeds:
+Migration `vpms/db/migrations/002_register_phase2_workers.sql` registers workers and capabilities.
 
-| Worker | Capabilities |
-|---|---|
-| `chronos` | none yet (Phase 2) |
-| `avatar-webinar` | none yet (Phase 2) |
-| `moneyprint` | none yet (Phase 2) |
-| `vmf` | `mock_video_render` (Phase 1 test) |
+### Worker Registry
 
-The `mock_video_render` capability on `vmf` has `code_present=true, credential_verified=true, integration_verified=true, production_verified=false, healthy=true` — meaning it passes Phase 1 dispatch eligibility but is not yet production-verified.
+| worker_id | name | base_url | max_concurrency | health_status | is_active |
+|---|---|---|---|---|---|
+| `chronos` | Chronos Content Showrunner | NULL (file-based) | 1 | UNKNOWN | true |
+| `avatar-webinar` | Avatar Webinar | `http://localhost:3200` | 3 | UNKNOWN | true |
+| `vmf` | Video Media Factory | `http://localhost:4100` | 5 | UNKNOWN | true |
+| `moneyprint` | MoneyPrint Faceless | — | — | — | **false** (Phase 3) |
+
+### Chronos Capabilities
+
+| capability | code_present | credential_verified | integration_verified | healthy |
+|---|---|---|---|---|
+| `content_research` | ✅ | ✅ | ✅ | ❌ |
+| `script_generation` | ✅ | ✅ | ✅ | ❌ |
+| `fish_audio_tts` | ✅ | ✅ | ✅ | ❌ |
+| `shotstack_render` | ✅ | ✅ | ✅ | ❌ |
+| `postiz_publish` | ✅ | ✅ | ✅ | ❌ |
+| `full_episode_pipeline` | ✅ | ✅ | ❌ | ❌ |
+
+### Avatar Webinar Capabilities
+
+| capability | code_present | credential_verified | integration_verified | healthy |
+|---|---|---|---|---|
+| `podcast_production` | ✅ | ❌ | ❌ | ❌ |
+| `render_from_script` | ✅ | ❌ | ❌ | ❌ |
+| `podcast_hybrid` | ✅ | ❌ | ❌ | ❌ |
+| `avatar_talking_head` | ✅ | ❌ | ❌ | ❌ |
+
+### VMF Capabilities
+
+| capability | code_present | credential_verified | integration_verified | healthy |
+|---|---|---|---|---|
+| `pipeline_video` | ✅ | ❌ | ❌ | ❌ |
+| `ugc_batch` | ✅ | ❌ | ❌ | ❌ |
+| `image_generation` | ✅ | ✅ | ✅ | ✅ |
+| `video_generation` | ✅ | ✅ | ✅ | ✅ |
+
+`image_generation` and `video_generation` on VMF are already dispatchable (VMs already has real credentials configured for Wavespeed/MuAPI/Runware). `mock_video_render` has been deactivated.
+
+## Dispatch Eligibility Status
+
+The only currently dispatchable Phase 2 capabilities are:
+- `vmf.image_generation` ✅
+- `vmf.video_generation` ✅
+
+`render_from_script` (Avatar Webinar) and `full_episode_pipeline` (Chronos) require credential and integration verification before production dispatch. This is the correct Phase 2 state — adapters are built and wired, credentials are pending configuration.
 
 ## Updating Verification Flags
 

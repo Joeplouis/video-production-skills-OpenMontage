@@ -29,6 +29,8 @@ class WorkerJobRequest(BaseModel):
     vpms_job_id: str
     worker: str
     production_type: str
+    content: Optional[dict] = None
+    production: Optional[dict] = None
     script: Optional[dict] = None
     scene_plan: Optional[list] = None
     brand: Optional[dict] = None
@@ -54,7 +56,7 @@ class WorkerReceipt(BaseModel):
     artifacts: list[dict] = []
     estimated_cost: float = 0.0
     actual_cost: float = 0.0
-    started_at: str
+    started_at: str = ""
     completed_at: Optional[str] = None
     errors: list[str] = []
 

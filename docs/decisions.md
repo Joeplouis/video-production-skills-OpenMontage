@@ -1,4 +1,4 @@
-# VPMS Design Decisions — Phase 1
+# VPMS Design Decisions — Phase 1 + Phase 2
 
 ## Overview
 
@@ -133,3 +133,89 @@ This log records major design decisions made during Phase 1 implementation, incl
 **Reason**: Required by the OpenMontage license. VPMS adds attribution but does not remove upstream copyright.
 
 **Evidence**: `vpms/__init__.py` — `__version__`, `__product_name__`, license note. Repository `LICENSE` file unchanged.
+
+---
+
+## Phase 2 Decisions
+
+## 14. Chronos adapter is file-based, not HTTP
+
+**Decision**: Chronos has no HTTP API. VPMS communicates via a file queue (`vpms_queue.json`) which Chronos reads on its next cron run.
+
+**Reason**: Chronos is a cron script (`run_chronos.sh`), not a long-running HTTP service. The file-based queue is the correct integration point. This avoids building an unnecessary HTTP wrapper around a batch job.
+
+**Evidence**: `vpms/adapters/chronos/worker.py` — `_save_queue()` writes JSON to `vpms_queue.json`. `dispatch()` returns a `worker_job_id` of form `chronos_queue_<index>` for polling.
+
+**Trade-off**: Chronos jobs are not immediately picked up. VPMS must poll `series_state.json` for completion. This is acceptable for Phase 2 (no strict SLA).
+
+---
+
+## 15. Avatar Webinar auth via JWT minting
+
+**Decision**: VPMS mints short-lived (5-min) HS256 JWTs using the Supabase service-role key, instead of storing a permanent user token.
+
+**Reason**: Avatar Webinar's `requireAuth` middleware calls `supabase.auth.getUser(token)` which validates against Supabase's JWT secret. VPMS uses the service-role key as the HMAC secret to produce tokens that Supabase will accept. Tokens are cached and refreshed automatically.
+
+**Evidence**: `vpms/adapters/avatar_webinar/worker.py` — `_mint_vpms_jwt()`. Requires `VPMS_AVATAR_WEBINAR_SUPABASE_URL` and `VPMS_AVATAR_WEBINAR_SERVICE_KEY` env vars.
+
+**Alternative considered**: Store a permanent VPMS user token in Supabase and rotate it manually. Rejected — too much operational overhead.
+
+---
+
+## 16. VMF auth via JWT Bearer token env var
+
+**Decision**: VMF uses `VPMS_VMF_JWT_TOKEN` env var for Bearer auth. Falls back gracefully if not set.
+
+**Reason**: VMF's `requireAuth` middleware accepts JWT Bearer tokens. VPMS can use a service token without needing to mint JWTs. Falls back to anonymous (public) access for health/capabilities checks — works without credentials.
+
+**Evidence**: `vpms/adapters/vmf/worker.py` — `_get_auth_token()` reads `VPMS_VMF_JWT_TOKEN`.
+
+---
+
+## 17. Golden Path is an ergonomic convenience, not the primary path
+
+**Decision**: `ProductionDirector.run_golden_path()` is a synchronous wrapper. Production use should call individual dispatch methods and poll via receipts API.
+
+**Reason**: Synchronous wrappers hide failures and don't scale to async workers. The receipts API (`POST /workers/{id}/receipt`) is the canonical async callback mechanism. The director is for scripting and simple workflows only.
+
+**Evidence**: `vpms/api/routes_golden_path.py` — `start_golden_path()` calls `director.run_golden_path()`. Worker callbacks use `worker_receipt_callback()`.
+
+---
+
+## 18. One worker at a time for Phase 2 integration
+
+**Decision**: Workers are connected one at a time (Chronos, then Avatar Webinar, then VMF), not simultaneously.
+
+**Reason**: Parallel integration makes failure attribution ambiguous. Sequential integration allows each worker's adapter to be verified in isolation before adding the next.
+
+**Evidence**: Per PRD Section 53: "Do not connect every system simultaneously." The adapters were built sequentially: VMF → Avatar Webinar → Chronos.
+
+---
+
+## 19. Production Director does not own the state machine
+
+**Decision**: `ProductionDirector` dispatches to workers and processes receipts, but does NOT directly mutate job state. It delegates to `JobManager.transition_state()`.
+
+**Reason**: Keeps state machine ownership in one place. Ensures every state transition is validated, events are emitted, and invalid transitions fail loudly.
+
+**Evidence**: `vpms/core/production_director.py` — all state transitions go through `JobManager` (via `self._job_manager`). The Director only calls `JobManager.transition_state()`, never `_job_repo.update_status()` directly.
+
+---
+
+## 20. `vpms_queue.json` for Chronos integration
+
+**Decision**: VPMS writes a separate queue file (`vpms_queue.json`), not the existing `series_state.json` that Chronos owns.
+
+**Reason**: Chronos owns `series_state.json` and may rewrite it on each run. A separate VPMS queue avoids write conflicts. Chronos can be extended later to read `vpms_queue.json` alongside its own state.
+
+**Evidence**: `vpms/adapters/chronos/worker.py` — `_queue_file = vpms_queue.json` (separate from `STATE_FILE = series_state.json`).
+
+---
+
+## 21. Worker receipts stored in DB, not just in memory
+
+**Decision**: Every worker dispatch creates a `WorkerJob` record in `vpms.worker_jobs`. Every receipt creates artifact records.
+
+**Reason**: Restart-safety. If VPMS restarts mid-production, the worker job records are preserved. VPMS can poll workers to reconcile state on restart.
+
+**Evidence**: `vpms/core/dispatcher.py:dispatch()` creates `WorkerJob` record. `process_receipt()` updates it. `vpms/db/models.py:WorkerJob` has `worker_job_id`, `status`, `provider`, `actual_cost`, `errors` fields.

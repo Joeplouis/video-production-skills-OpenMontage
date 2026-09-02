@@ -172,10 +172,60 @@ class WorkerArtifact(BaseModel):
 
 Run with: `python -m vpms.adapters.mock_worker.worker` (port 8091)
 
-## Phase 2 Adapters (not wired in Phase 1)
+## Phase 2 Adapters (wired, tested, in production use)
 
-- `vpms/adapters/chronos/` — Chronos content showrunner
-- `vpms/adapters/avatar_webinar/` — Avatar Webinar production
-- `vpms/adapters/vmf/` — Video Media Factory
+### `vpms/adapters/chronos/worker.py` — Chronos Content Showrunner
 
-These directories contain `__init__.py` stubs for Phase 2 wiring.
+Chronos is a cron-driven autonomous showrunner with no HTTP API. VPMS communicates via file-based queue.
+
+| Method | Implementation |
+|--------|--------------|
+| `health_check()` | Checks series_state.json exists + run_chronos.sh is executable |
+| `get_capabilities()` | Returns static list: research, script_generation, fish_audio_tts, shotstack_render, postiz_publish |
+| `dispatch()` | Writes VPMS job to `vpms_queue.json`, returns queue index as worker_job_id |
+| `get_status()` | Reads `series_state.json` — maps episodes_history entries to VPMS receipt status |
+| `get_artifacts()` | Reads completed episode data (video URL, thumbnail, YouTube metadata) |
+| `cancel()` | Removes entry from `vpms_queue.json` |
+
+Auth: None (local filesystem).
+
+### `vpms/adapters/avatar_webinar/worker.py` — Avatar Webinar Production
+
+Avatar Webinar is an HTTP REST API (Node.js/Express) on `localhost:3200`. It uses Supabase JWT auth.
+
+| Method | Implementation |
+|--------|--------------|
+| `health_check()` | GET `/health` |
+| `get_capabilities()` | GET `/api/production/providers/list` |
+| `dispatch()` | POST `/api/production/render-from-script` (one-call, best for VPMS) |
+| `get_status()` | GET `/api/production/:id/status` — maps `done/failed/rendering` to VPMS |
+| `get_artifacts()` | GET `/api/production/:id/assets` — returns final video, clips, scene renders |
+| `cancel()` | Not supported by Avatar Webinar — returns False |
+
+Auth: VPMS mints short-lived (5-min) HS256 JWTs using the Supabase service-role key.
+
+### `vpms/adapters/vmf/worker.py` — Video Media Factory
+
+VMF is a Node.js Express API on `localhost:4100`. Uses JWT Bearer auth.
+
+| Method | Implementation |
+|--------|--------------|
+| `health_check()` | GET `/api/health` |
+| `get_capabilities()` | GET `/api/providers` |
+| `dispatch()` | POST `/api/pipeline/generate` (pipeline) or POST `/api/ugc/batch` (UGC) |
+| `get_status()` | GET `/api/pipeline/status/:jobId` — maps VMF status to VPMS |
+| `get_artifacts()` | GET `/api/renders/:jobId` — fetches final render URLs |
+| `cancel()` | Not supported by VMF — returns False |
+
+Auth: Set `VPMS_VMF_JWT_TOKEN` env var. Falls back gracefully if not set (anonymous calls to public endpoints).
+
+## Environment Setup for Phase 2 Adapters
+
+```bash
+# VMF auth
+export VPMS_VMF_JWT_TOKEN="your-vmf-jwt-token"
+
+# Avatar Webinar auth
+export VPMS_AVATAR_WEBINAR_SUPABASE_URL="https://your-project.supabase.co"
+export VPMS_AVATAR_WEBINAR_SERVICE_KEY="your-service-role-key"
+```

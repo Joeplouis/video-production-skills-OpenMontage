@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from vpms import __version__, __product_name__
 from vpms.api.routes import router, health_router
+from vpms.api.routes_golden_path import router as golden_path_router
 
 
 def create_app() -> FastAPI:
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
     # Mount routers
     app.include_router(health_router)  # /health at root
     app.include_router(router)  # /api/v1/*
+    app.include_router(golden_path_router)  # /api/v1/* (Phase 2 Golden Path)
 
     return app
 

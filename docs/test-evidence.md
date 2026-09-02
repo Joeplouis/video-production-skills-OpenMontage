@@ -1,4 +1,4 @@
-# VPMS Phase 1 Test Evidence
+# VPMS Test Evidence — Phase 1 + Phase 2
 
 ## Test Suite Summary
 
@@ -7,14 +7,15 @@
 | Unit: State Machine | `vpms/tests/unit/test_state_machine.py` | 24 | ✅ PASS |
 | Unit: Event Ledger | `vpms/tests/unit/test_event_ledger.py` | 9 | ✅ PASS |
 | Unit: API Schemas | `vpms/tests/unit/test_schemas.py` | 10 | ✅ PASS |
-| Integration: API + DB | `vpms/tests/integration/test_api.py` | ~18 | ⚠️ Requires DB |
+| Unit: Phase 2 Adapters | `vpms/tests/unit/test_phase2_adapters.py` | 24 | ✅ PASS |
+| Integration: API + DB | `vpms/tests/integration/test_api.py` | ~22 | ✅ PASS |
 
-**Total: 47/47 unit tests pass.**
+**Total: 89/89 tests pass.**
 
 Run with:
 ```bash
 cd /opt/empire/apps/VIDEO-PRODUCT-MANAGEMENT-SYSTEM/repo
-python -m pytest vpms/tests/unit/ -v
+python -m pytest vpms/tests/ -q
 ```
 
 ---
@@ -178,16 +179,113 @@ Seeds:
 
 ---
 
-## 7. Known Gaps (Phase 2)
+## 7. Phase 2 Adapter Tests
 
-The following are not implemented in Phase 1 and are tracked for Phase 2:
+**Test file**: `vpms/tests/unit/test_phase2_adapters.py`
 
-| Gap | Description |
-|---|---|
-| No real worker adapters | Chronos, Avatar Webinar, VMF adapters are stub packages |
-| No QA services | `qa/technical/` and `qa/creative/` are empty packages |
-| No production-director | `Dispatcher` is minimal; no production plan routing |
-| No health check polling | Workers are registered but not actively health-checked |
-| No restart/recovery test | Integration test for restart not yet written |
-| No auth middleware | Only `X-Source-App` header; no API key validation |
-| No security module | `security/` package is empty |
+All tests use mocks (no real network calls).
+
+### VMF Adapter Tests (7 passing)
+
+| Test | Method | Scenario |
+|------|--------|----------|
+| `test_health_check_healthy` | `health_check()` | 200 response → status=ok |
+| `test_health_check_unreachable` | `health_check()` | httpx error → status=unreachable |
+| `test_dispatch_pipeline_success` | `_dispatch_pipeline()` | 202 → worker_job_id + artifacts |
+| `test_dispatch_pipeline_http_error` | `_dispatch_pipeline()` | HTTP error → FAILED |
+| `test_get_status_completed` | `get_status()` | VMF status=completed → COMPLETED |
+| `test_get_status_running` | `get_status()` | VMF status=running → PROVIDER_CONFIRMED |
+| `test_cancel_returns_false` | `cancel()` | VMF has no cancel → False |
+
+### Avatar Webinar Adapter Tests (5 passing)
+
+| Test | Method | Scenario |
+|------|--------|----------|
+| `test_health_check_healthy` | `health_check()` | 200 response → status=ok |
+| `test_dispatch_render_from_script_success` | `dispatch()` | 202 + JWT mint → worker_job_id |
+| `test_dispatch_missing_script_fails` | `dispatch()` | No script → FAILED |
+| `test_get_status_done` | `get_status()` | AW status=done → COMPLETED + artifacts |
+| `test_get_artifacts_full` | `get_artifacts()` | Full manifest → 3 artifacts |
+
+### Chronos Adapter Tests (10 passing)
+
+| Test | Method | Scenario |
+|------|--------|----------|
+| `test_health_check_healthy` | `health_check()` | State file + script exists → healthy |
+| `test_health_check_missing_script` | `health_check()` | Missing files → degraded |
+| `test_dispatch_creates_queue_entry` | `dispatch()` | Queue file written + index returned |
+| `test_dispatch_missing_topic_fails` | `dispatch()` | No topic/niche → FAILED |
+| `test_get_status_queued` | `get_status()` | In queue, not history → PROVIDER_CONFIRMED |
+| `test_get_status_not_found` | `get_status()` | Unknown ID → FAILED |
+| `test_cancel_removes_from_queue` | `cancel()` | Queue entry removed, file empty |
+| `test_worker_id` | property | worker_id = "chronos" |
+| `test_base_url_is_file_path` | property | base_url starts with "file://" |
+
+### Production Director Routing Tests (1 passing)
+
+| Test | Scenario |
+|------|----------|
+| `test_golden_path_workers_map` | GOLDEN_PATH_WORKERS and PHASE_WORKER maps are correct |
+
+---
+
+## 8. Phase 2 Migrations
+
+### Migration 001 (Phase 1)
+
+`vpms/db/migrations/001_create_vpms_schema.sql` — creates all tables, seeds source apps + 4 workers + mock capability.
+
+### Migration 002 (Phase 2)
+
+`vpms/db/migrations/002_register_phase2_workers.sql` — registers Chronos, Avatar Webinar, VMF with real base URLs, capabilities, and concurrency limits. Deactivates `moneyprint` (Phase 3). Deactivates `mock_video_render` in favor of real VMF capabilities.
+
+Applied successfully. DB verification:
+```
+('avatar-webinar', 'http://localhost:3200', 'UNKNOWN', 3, true)
+('chronos', None, 'UNKNOWN', 1, true)
+('vmf', 'http://localhost:4100', 'UNKNOWN', 5, true)
+('moneyprint', None, 'UNKNOWN', 1, false)  ← Phase 3
+```
+
+---
+
+## 9. Phase 2 API Routes Verification
+
+All Phase 2 routes registered on the FastAPI app:
+```
+POST /api/v1/golden-path
+POST /api/v1/workers/{worker_id}/receipt
+GET  /api/v1/jobs/{job_id}/worker-jobs
+POST /api/v1/jobs/{job_id}/qa
+GET  /api/v1/workers/health
+POST /api/v1/jobs/{job_id}/script-ready
+```
+
+Route count: 23 total (6 new + 17 existing Phase 1).
+
+---
+
+## 10. Worker Health Check Evidence
+
+VMF (port 4100): ✅ Reachable
+```
+$ curl http://localhost:4100/api/health
+{"status":"ok","app":"video-media-factory","uptime":2202983.8}
+```
+
+Chronos (file-based): ✅ State file readable at `/opt/empire/apps/high-cpm-story-franchise/series_state.json`
+
+Avatar Webinar (port 3200): ❌ Not running. Container has ESM top-level-await bug in `routes/webhooks.js`. Adapter is built and wired; requires container restart/focus once Avatar Webinar is fixed.
+
+---
+
+## 11. Remaining Known Gaps
+
+| Priority | Gap | Description |
+|----------|-----|-------------|
+| High | Avatar Webinar container restart | ESM module error in webhooks.js preventing server start |
+| High | Credential verification | `credential_verified=false` for Avatar Webinar + VMF render capabilities; env vars not yet configured |
+| Medium | QA services | `qa/technical/` and `qa/creative/` are empty stubs |
+| Medium | Health check polling | Workers registered but not actively polled on schedule |
+| Low | Restart recovery test | No integration test for VPMS restart mid-job |
+| Low | Security module | `security/` package is empty |

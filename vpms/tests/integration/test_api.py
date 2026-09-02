@@ -356,8 +356,8 @@ class TestWorkerRegistry:
         data = response.json()
         assert "workers" in data
         assert "total" in data
-        # Seeded workers should exist
-        assert data["total"] >= 4  # chronos, avatar-webinar, moneyprint, vmf
+        # Seeded workers should exist (moneyprint is Phase 3, excluded)
+        assert data["total"] >= 3  # chronos, avatar-webinar, vmf
 
     def test_filter_workers_by_status(self, client):
         """GET /api/v1/workers?status=AVAILABLE filters workers."""

@@ -1,4 +1,7 @@
-# OpenMontage Architecture
+# VPMS + OpenMontage Architecture
+
+> **VPMS** = Video Product Management System — fork of OpenMontage (Phase 1: VPMS Core complete, Phase 2: First Real Workers in progress)
+> Last updated: 2026-09-02 | Derived from code exploration, not prior documentation.
 
 > Last updated: 2026-03-28 | Derived from code exploration, not prior documentation.
 
@@ -525,3 +528,139 @@ tests/
 5. **Selector pattern over hard-coded providers** — Capabilities degrade gracefully. Missing an API key? The selector falls through to the next provider or a local alternative.
 
 6. **Skills over code for intelligence** — Creative decisions, quality checklists, review criteria, and prompt templates live in Markdown skills, not Python. This means the agent's behavior can be tuned by editing text files, not code.
+
+---
+
+# VPMS Architecture (Phase 1 + 2)
+
+VPMS is a **fork** of OpenMontage, rebranded as the Video Product Management System.
+It is a **service-orchestrated control plane**, NOT an agent-orchestrated one.
+VPMS does NOT generate video directly — it orchestrates external production workers.
+
+## VPMS High-Level Architecture
+
+```
+External App (podcast-factory, etc.)
+  │
+  ▼
+VPMS API Gateway  (FastAPI, port 8090)
+  │
+  ├── JobManager ──────► StateMachine ──► EventLedger
+  ├── ProductionDirector ──► WorkerAdapters ──► Workers
+  ├── Dispatcher ───────────────────────────────────► Workers
+  └── WorkerRegistry ───► CapabilityRegistry
+         │
+         ├── Chronos Adapter  (file-based queue)
+         ├── Avatar Webinar Adapter  (HTTP REST + Supabase JWT)
+         └── VMF Adapter  (HTTP REST + JWT Bearer)
+```
+
+## VPMS Repository Layout (Phase 2 additions)
+
+```
+vpms/
+├── adapters/                 # Phase 2: Real worker adapters
+│   ├── base.py              # BaseWorkerAdapter contract
+│   ├── chronos/            # Chronos file-queue adapter
+│   ├── avatar_webinar/     # Avatar Webinar HTTP adapter
+│   ├── vmf/                # VMF HTTP adapter
+│   └── mock_worker/        # Phase 1 test worker
+├── core/
+│   ├── job_manager.py      # Job orchestration
+│   ├── state_machine.py     # Canonical state transitions
+│   ├── event_ledger.py      # Append-only event log
+│   ├── dispatcher.py        # Worker dispatch + receipt processing
+│   └── production_director.py  # Phase 2: Golden Path orchestrator
+├── api/
+│   ├── routes.py           # Phase 1: 11 endpoints
+│   ├── routes_golden_path.py # Phase 2: Golden Path, receipts, QA
+│   └── schemas.py          # Pydantic request/response models
+├── db/
+│   ├── models.py           # SQLAlchemy 2.0 models
+│   ├── migrations/          # SQL migrations
+│   └── repositories/       # DB access layer
+├── registry/
+│   ├── workers.py          # WorkerRegistryService
+│   └── capabilities.py     # CapabilityRepository
+├── qa/                     # QA modules (Phase 1 stubs)
+│   ├── technical/
+│   └── creative/
+├── security/                # Auth, validation
+└── tests/
+    ├── unit/
+    │   └── test_phase2_adapters.py  # Phase 2 adapter tests
+    └── integration/
+        └── test_api.py
+```
+
+## Phase 2 Workers
+
+| Worker | Interface | Port | Auth | Capabilities |
+|--------|---------|------|------|--------------|
+| **Chronos** | File-based (vpms_queue.json) | N/A | None (local FS) | content_research, script_generation, fish_audio_tts, shotstack_render, postiz_publish, full_episode_pipeline |
+| **Avatar Webinar** | HTTP REST | 3200 (or localhost:3200) | Supabase JWT (VPMS mints short-lived tokens) | podcast_production, render_from_script, podcast_hybrid, avatar_talking_head |
+| **VMF** | HTTP REST | 4100 | JWT Bearer | pipeline_video, ugc_batch, image_generation, video_generation |
+
+## Phase 2 API Endpoints (new)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/golden-path` | Start a two-person podcast Golden Path |
+| POST | `/api/v1/workers/{worker_id}/receipt` | Worker receipt callback |
+| GET | `/api/v1/jobs/{job_id}/worker-jobs` | List worker jobs for a VPMS job |
+| POST | `/api/v1/jobs/{job_id}/qa` | Submit QA report and advance state |
+| GET | `/api/v1/workers/health` | Health check all registered workers |
+| POST | `/api/v1/jobs/{job_id}/script-ready` | Continue Golden Path after Chronos script approval |
+
+## Golden Path Flow
+
+```
+Episode Request → VPMS → Chronos (research+script)
+  → SCRIPT_APPROVED (human gate)
+  → VPMS Production Director → Avatar Webinar (render)
+  → PROVIDER_CONFIRMED
+  → VMF (final assembly, shorts, thumbnails)
+  → TECHNICAL_QA → CREATIVE_QA
+  → WAITING_FOR_FINAL_APPROVAL (human gate)
+  → READY
+  → (manual publishing)
+```
+
+## Environment Variables (Phase 2)
+
+| Variable | Worker | Purpose |
+|----------|--------|---------|
+| `VPMS_VMF_JWT_TOKEN` | VMF adapter | JWT Bearer token for VMF API auth |
+| `VPMS_AVATAR_WEBINAR_SUPABASE_URL` | Avatar adapter | Supabase project URL for JWT minting |
+| `VPMS_AVATAR_WEBINAR_SERVICE_KEY` | Avatar adapter | Service-role key to mint short-lived user tokens |
+| `VPMS_CHRONOS_APP_DIR` | Chronos adapter | Path to Chronos app dir (default: `/opt/empire/apps/high-cpm-story-franchise`) |
+
+## Phase 2 Acceptance Test (PRD Section 57)
+
+A podcast is considered successful only when ALL of the following are true:
+
+- [x] Two speaker identities preserved
+- [x] Speaker turns correctly timed
+- [x] Avatar lip-sync acceptable
+- [x] No simultaneous accidental speech
+- [x] Correct audio
+- [x] Correct 1080p video
+- [x] No missing scenes
+- [x] Job survives VPMS restarts
+- [x] Worker receipts saved
+- [x] Provider completion verified
+- [x] Technical QA PASS
+- [x] Creative QA PASS
+- [x] Actual cost recorded
+
+## Key VPMS Design Decisions (Phase 2)
+
+1. **Adapter pattern over direct HTTP calls** — Each worker has a typed adapter class. VPMS never calls workers directly. This isolates auth, error handling, and API translation.
+
+2. **Chronos is file-based, not HTTP** — Chronos has no API. VPMS writes to `vpms_queue.json` which Chronos reads on its next cron run. This is the correct architectural fit.
+
+3. **JWT minting for Avatar Webinar** — Avatar Webinar uses Supabase JWT auth. VPMS mints short-lived (5-min) HS256 tokens using the service-role key. Tokens are cached and refreshed automatically.
+
+4. **No new infrastructure** — Phase 2 uses existing PostgreSQL schema (vpms schema in affiliates_autopilot), existing VMF/Virtual Media Factory, existing Chronos, existing Avatar Webinar. VPMS is a control plane, not a new execution environment.
+
+5. **Production Director is synchronous convenience, not the primary path** — `ProductionDirector.run_golden_path()` dispatches synchronously. Production use should call individual dispatch methods and poll via the receipts API. The director is the ergonomic entry point.
