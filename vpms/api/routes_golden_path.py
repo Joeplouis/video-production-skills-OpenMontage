@@ -391,12 +391,11 @@ class WorkerHealthResponse(BaseModel):  # noqa: F821
     "/workers/health",
     summary="Health check all registered workers",
 )
-def health_check_all_workers(db: Session = Depends(get_db)):
+async def health_check_all_workers(db: Session = Depends(get_db)):
     """
     Run health checks against all registered workers.
     Returns health status for each worker.
     """
-    import asyncio
     from vpms.adapters.chronos import ChronosWorkerAdapter
     from vpms.adapters.avatar_webinar import AvatarWebinarWorkerAdapter
     from vpms.adapters.vmf import VMFWorkerAdapter
@@ -425,7 +424,7 @@ def health_check_all_workers(db: Session = Depends(get_db)):
                     "error": str(e),
                 }
 
-    asyncio.get_event_loop().run_until_complete(check_all())
+    await check_all()
 
     # Update DB health status for reachable workers
     for wid, info in results.items():
