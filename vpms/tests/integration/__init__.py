@@ -1,1 +1,0 @@
-"""VPMS Integration Tests."""
